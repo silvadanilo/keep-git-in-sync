@@ -4,13 +4,13 @@ use git2::Repository;
 use log::debug;
 use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
 mod vc;
 
-fn main() {
+fn main() -> Result<(), notify::Error> {
     env_logger::init();
 
     let folders = vec!["/tmp/acp", "/tmp/acp2", "/tmp/acp3", "/tmp/foo"];
@@ -26,13 +26,13 @@ fn main() {
 
     debug!("listening on folders: {:?}", repositories.keys());
 
-    watch(repositories);
+    watch(repositories)
 }
 
 fn watch(repositories: HashMap<&str, Repository>) -> notify::Result<()> {
     let (tx, rx) = channel();
 
-    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_millis(300))?;
+    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_millis(100))?;
 
     for path in repositories.keys() {
         watcher.watch(path, RecursiveMode::Recursive)?;
@@ -42,7 +42,7 @@ fn watch(repositories: HashMap<&str, Repository>) -> notify::Result<()> {
         if let Ok(event) = rx.recv() {
             if let Some(path) = changed_path(event) {
                 let repo = related_repository(path, &repositories).unwrap();
-                vc::submit(repo);
+                vc::submit(repo).unwrap_or(());
             }
         }
     }
@@ -70,5 +70,13 @@ fn changed_path(event: DebouncedEvent) -> Option<PathBuf> {
         | DebouncedEvent::Remove(path)
         | DebouncedEvent::Rename(_, path) => Some(path),
         _ => None,
-    }
+    }.and_then(|path| {
+        let is_git = path.components()
+            .any(|component| component == Component::Normal(OsStr::new(".git")));
+
+        match is_git {
+            true => None,
+            false => Some(path)
+        }
+    })
 }
